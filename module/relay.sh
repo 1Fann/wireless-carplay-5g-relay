@@ -159,6 +159,36 @@ route_is_intact() {
         grep -Fq "dev $uplink "
 }
 
+hide_box_wifi_notice() {
+    # HyperOS tags this notification with the Android network ID.
+    notices=$(printf '' | /system/bin/cmd notification list 2>/dev/null |
+        grep -E '^(-1|0)\|android\|13\|WifiAssistant:[0-9]+\|1000$')
+    [ -n "$notices" ] || return 0
+    box_net_id=$(printf '' | /system/bin/dumpsys connectivity 2>/dev/null |
+        awk -v lan="$lan" -v addr="$lan_ip" '
+          /NetworkAgentInfo\{network\{[0-9]+\}/ &&
+          index($0, "InterfaceName: " lan " ") &&
+          index($0, " " addr "/") && index($0, "Transports: WIFI") {
+            id=$0; sub(/^.*NetworkAgentInfo\{network\{/, "", id)
+            sub(/\}.*/, "", id); print id; exit
+          }')
+    [ -n "$box_net_id" ] || return 0
+    for notice in $notices; do
+        case "$notice" in
+            *"|WifiAssistant:$box_net_id|"*)
+                details=$(printf '' | /system/bin/cmd notification get "$notice" 2>/dev/null)
+                case "$details" in
+                    *"Notification(channel=NETWORK_STATUS "*)
+                        if result=$(printf '' | /system/bin/cmd notification snooze --for 86400000 "$notice" 2>&1); then
+                            case "$result" in *"snoozing <"*) log 'Hid the box Wi-Fi no-internet notification' ;; esac
+                        fi
+                        ;;
+                esac
+                ;;
+        esac
+    done
+}
+
 mkdir -p "$state" || exit 1
 if [ "${1:-}" != --locked ]; then
     exec /data/adb/ksu/bin/busybox flock -n "$state/module.lock" /system/bin/sh "$0" --locked
@@ -187,6 +217,7 @@ while [ -f "$module/module.prop" ] && [ ! -e "$module/remove" ]; do
         "Connected to "*)
             if printf '%s\n' "$wifi" | grep -Fxq "$(printf '\tSSID: %s' "$ssid")" &&
                 ip -4 addr show dev "$lan" | grep -Fq "inet $lan_ip/"; then
+                hide_box_wifi_notice
                 request_cellular
                 configure_local_network
                 set -- $(read_cellular_network)

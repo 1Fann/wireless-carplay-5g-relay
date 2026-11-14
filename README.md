@@ -13,6 +13,8 @@
 
 当前实现需要 KernelSU、Android 29 及以上、iptables 和可用的 rmnet 蜂窝接口。盒子须允许同一 Wi-Fi 下的客户端互通。已在一套设备上验证上网链路，其他设备和实际车机兼容性需要验证。部分澎湃 OS 手机可在「设置 → WLAN → 网络加速」关闭「网络切换」，减少无互联网切换提醒。这个选项会影响该手机的其他 WLAN。
 
+在支持对应通知接口的澎湃 OS 上，模块会暂缓当前盒子网络的「当前 WLAN 无法访问互联网」通知。控制中心的 WLAN 连接状态仍由系统显示。
+
 ## 构建和卸载
 
 模块 ZIP 的根目录包含 module 目录的文件和 `cellular-request.jar`。使用 Android SDK 35 的 `android.jar` 编译 `cellular-helper/CellularRequest.java`，再用 D8 生成含 `classes.dex` 的 JAR。进程依赖系统的 `app_process` 和当前设备允许 root 注册蜂窝请求，其他 ROM 需要实测。
