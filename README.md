@@ -1,6 +1,6 @@
 # 无线Carplay盒子5G中继
 
-作者 1Fan。两台手机连到无线 CarPlay 盒子的 Wi-Fi。Android 手机用蜂窝数据为 iPhone 转发 IPv4 流量，盒子只提供本地无线链路。
+两台手机连到无线 CarPlay 盒子的 Wi-Fi。Android 手机用蜂窝数据为 iPhone 转发 IPv4 流量，盒子只提供本地无线链路。
 
 ## 安装
 
