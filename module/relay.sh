@@ -12,8 +12,7 @@ forward_owner=carplay_5g_relay
 uplink=
 table=
 owns_chain=0
-cellular_service=local.carplay.cellular/.CellularService
-cellular_requested=0
+cellular_pid=
 forward_requested=0
 saved_wifi_default=
 power_save_changed=0
@@ -51,24 +50,20 @@ start_route() {
 }
 
 request_cellular() {
-    if [ "$cellular_requested" = 1 ] && pidof local.carplay.cellular >/dev/null; then
+    if [ -n "$cellular_pid" ] && kill -0 "$cellular_pid" 2>/dev/null; then
         return 0
     fi
-    # Android's shell command binder needs pipes when the service runs detached.
-    result=$(printf '' | am start-foreground-service -n "$cellular_service" 2>&1)
-    printf '%s\n' "$result" >>"$state/relay.log"
-    if [ -n "$result" ] && ! printf '%s\n' "$result" | grep -qiE 'failure|error|exception'; then
-        cellular_requested=1
-    fi
+    CLASSPATH="$module/cellular-request.jar" /system/bin/app_process /system/bin \
+        --nice-name=carplay-cellular-request local.carplay.cellular.CellularRequest \
+        9>&- >"$state/cellular-request.log" 2>&1 &
+    cellular_pid=$!
 }
 
 release_cellular() {
-    [ "$cellular_requested" = 1 ] || return 0
-    result=$(printf '' | am stop-service -n "$cellular_service" 2>&1)
-    printf '%s\n' "$result" >>"$state/relay.log"
-    if [ -n "$result" ] && ! printf '%s\n' "$result" | grep -qiE 'failure|error|exception'; then
-        cellular_requested=0
-    fi
+    [ -n "$cellular_pid" ] || return 0
+    kill -TERM "$cellular_pid" 2>/dev/null || :
+    wait "$cellular_pid" 2>/dev/null || :
+    cellular_pid=
 }
 
 restore_local_network() {

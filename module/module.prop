@@ -1,6 +1,6 @@
 id=carplay_5g_relay
 name=无线Carplay盒子5G中继
-version=1.1.1
-versionCode=7
+version=1.2.0
+versionCode=8
 author=1Fan
 description=连接已配置的盒子 Wi-Fi 时按需申请蜂窝网络并转发 iPhone 流量。离开该 Wi-Fi 后清理规则。
