@@ -4,7 +4,7 @@
 
 ## 安装
 
-1. 从 Releases 下载并安装「CarPlay 蜂窝连接助手」APK，再用 KernelSU 安装模块 ZIP。重启 Android。
+1. 从 Releases 下载模块 ZIP，用 KernelSU 安装，再重启 Android。安装器会一并安装内置的「CarPlay 蜂窝连接助手」，无需单独下载 APK。
 2. 让两个手机连接盒子的 Wi-Fi。在 KernelSU 模块的设置页填写盒子 Wi-Fi 名称、Android 在此网络上的 IPv4 地址、iPhone 的 IPv4 地址，以及 iPhone 在该网络详情中显示的 Wi-Fi 地址（MAC）。选取可用地址以避免 DHCP 地址冲突。
 3. 在 iPhone 的 Wi-Fi 详情里使用同网段的手动 IPv4 地址，将路由器填为 Android 的 IPv4 地址，填写可达的 DNS（例如 223.5.5.5），关闭 HTTP 代理。保持 Android 移动数据开启。
 4. 在停车状态下验证无线 CarPlay、iPhone 外网和 Android 原有应用。换盒子时按新的网络参数更新即可。
@@ -15,6 +15,6 @@
 
 ## 构建和卸载
 
-模块 ZIP 的根目录是 module 目录的内容。助手可用 Android SDK 35 对 cellular-helper 中的清单和 Java 源文件编译打包，并用自己的密钥签名。
+模块 ZIP 的根目录是 module 目录的内容和签名后的蜂窝连接助手（文件名为 `cellular-helper.apk`）。助手可用 Android SDK 35 对 cellular-helper 中的清单和 Java 源文件编译打包，并用自己的密钥签名。从已有版本升级时须使用同一个签名密钥。
 
 在 KernelSU 中关闭或卸载模块，再卸载蜂窝连接助手。在 iPhone 的盒子 Wi-Fi 设置中把 IP 和 DNS 恢复为自动。
