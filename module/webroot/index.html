@@ -27,6 +27,10 @@
     <input id="phone" required placeholder="192.168.1.3">
     <label for="mac">iPhone 在这个 Wi-Fi 上显示的 MAC 地址</label>
     <input id="mac" required placeholder="00:11:22:33:44:55" autocapitalize="off">
+    <label for="download">下载上限（Mbps）</label>
+    <input id="download" type="number" inputmode="numeric" min="1" max="500" step="1" value="24" required>
+    <label for="upload">上传上限（Mbps）</label>
+    <input id="upload" type="number" inputmode="numeric" min="1" max="500" step="1" value="12" required>
     <p>在 iPhone 的 Wi-Fi 设置中，将安卓手机的地址填为路由器。</p>
     <button>保存</button>
   </form>
@@ -37,7 +41,7 @@ const input = document.getElementById("ssid");
 const status = document.getElementById("status");
 const form = document.getElementById("settings");
 const settingsPath = "/data/adb/carplay-5g-relay/network.conf";
-const fields = [input, ...["gateway", "phone", "mac"].map(id => document.getElementById(id))];
+const fields = [input, ...["gateway", "phone", "mac", "download", "upload"].map(id => document.getElementById(id))];
 let nextCallback = 0;
 
 function run(command) {
@@ -58,8 +62,18 @@ function run(command) {
 }
 
 run("if [ -f " + settingsPath + " ]; then cat " + settingsPath + "; fi")
-  .then(value => { value.split("\n").slice(0, 4).forEach((part, i) => { fields[i].value = part; }); })
+  .then(value => {
+    const lines = value.split("\n");
+    fields.slice(0, 4).forEach((field, i) => { field.value = lines[i] ?? ""; });
+    fields.slice(4).forEach((field, i) => {
+      if (validRate(lines[i + 4])) field.value = lines[i + 4];
+    });
+  })
   .catch(() => { status.textContent = "请在 KernelSU 管理器内打开此页面。"; });
+
+function validRate(value) {
+  return /^(?:[1-9]|[1-9][0-9]|[1-4][0-9][0-9]|500)$/.test(value);
+}
 
 form.addEventListener("submit", async event => {
   event.preventDefault();
@@ -68,15 +82,19 @@ form.addEventListener("submit", async event => {
     status.textContent = "请输入有效的 Wi-Fi 名称，最多 32 字节。";
     return;
   }
-  const [gateway, phone, mac] = fields.slice(1).map(field => field.value.trim());
+  const [gateway, phone, mac, download, upload] = fields.slice(1).map(field => field.value.trim());
   const ipv4 = value => /^(0|[1-9]\d{0,2})(\.(0|[1-9]\d{0,2})){3}$/.test(value) &&
     value.split(".").every(part => Number(part) <= 255);
   if (!ipv4(gateway) || !ipv4(phone) || gateway === phone || !/^([\da-f]{2}:){5}[\da-f]{2}$/i.test(mac)) {
     status.textContent = "请检查 IPv4 地址和 MAC 地址。两个 IPv4 地址应不同。";
     return;
   }
+  if (!validRate(download) || !validRate(upload)) {
+    status.textContent = "请输入 1 到 500 之间的整数速率。";
+    return;
+  }
   // Encode the entire user input before passing it through the shell bridge.
-  const bytes = new TextEncoder().encode([ssid, gateway, phone, mac, ""].join("\n"));
+  const bytes = new TextEncoder().encode([ssid, gateway, phone, mac, download, upload, ""].join("\n"));
   const encoded = btoa(String.fromCharCode(...bytes));
   try {
     await run("umask 077; mkdir -p /data/adb/carplay-5g-relay && tmp=$(mktemp " + settingsPath + ".XXXXXX) && " +

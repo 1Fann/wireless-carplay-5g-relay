@@ -16,10 +16,125 @@ cellular_pid=
 forward_requested=0
 saved_wifi_default=
 power_save_changed=0
+download_queue=cp5g_dl
+download_bypass_pref=49100
+download_redirect_pref=49101
+owns_download_queue=0
+owns_download_bypass=0
+owns_download_redirect=0
+upload_queue=cp5g_ul
+upload_bypass_pref=49102
+upload_redirect_pref=49103
+owns_upload_queue=0
+owns_upload_bypass=0
+owns_upload_redirect=0
+download_rate=24
+upload_rate=12
 
 log() { printf '%s %s\n' "$(date '+%F %T')" "$*" >>"$state/relay.log"; }
 
+clear_download_queue() {
+    if [ "$owns_download_redirect" = 1 ]; then
+        tc filter del dev "$lan" egress protocol ip pref "$download_redirect_pref" 2>/dev/null || :
+        owns_download_redirect=0
+    fi
+    if [ "$owns_download_bypass" = 1 ]; then
+        tc filter del dev "$lan" egress protocol ip pref "$download_bypass_pref" 2>/dev/null || :
+        owns_download_bypass=0
+    fi
+    if [ "$owns_download_queue" = 1 ]; then
+        ip link del "$download_queue" 2>/dev/null || :
+        owns_download_queue=0
+    fi
+}
+
+wifi_subnet() {
+    ip -4 route show table main dev "$lan" scope link |
+        awk -v addr="$lan_ip" '$1 ~ /^[0-9.]+\/[0-9]+$/ && $NF == addr {print $1; exit}'
+}
+
+queue_hook_available() {
+    local filters
+    filters=$(tc filter show dev "$lan" "$1" 2>/dev/null) || return 1
+    [ -z "$filters" ] || return 1
+    tc qdisc show dev "$lan" | grep -q '^qdisc clsact '
+}
+
+set_queue_rate() {
+    local operation=$1 device=$2 rate=$3 burst
+    burst=$((rate * 4 / 3))
+    [ "$burst" -ge 4 ] || burst=4
+    tc class "$operation" dev "$device" parent 1: classid 1:10 htb \
+        rate "${rate}mbit" ceil "${rate}mbit" burst "${burst}k" cburst "${burst}k"
+}
+
+configure_queue() {
+    local device=$1 rate=$2
+    ip link set "$device" up &&
+    tc qdisc add dev "$device" root handle 1: htb default 10 &&
+    set_queue_rate add "$device" "$rate" &&
+    tc qdisc add dev "$device" parent 1:10 handle 10: fq_codel limit 128
+}
+
+start_download_queue() {
+    local subnet
+    subnet=$(wifi_subnet)
+    [ -n "$subnet" ] && queue_hook_available egress || return 1
+    ip link add "$download_queue" type ifb || return 1
+    owns_download_queue=1
+    configure_queue "$download_queue" "$download_rate" || return 1
+    # Leave replies from the local Wi-Fi subnet in the ordinary transmit queue.
+    tc filter add dev "$lan" egress protocol ip pref "$download_bypass_pref" u32 \
+        match ip src "$subnet" match ip dst "$iphone/32" flowid 1:1 || return 1
+    owns_download_bypass=1
+    tc filter add dev "$lan" egress protocol ip pref "$download_redirect_pref" u32 \
+        match ip dst "$iphone/32" action mirred egress redirect dev "$download_queue" || return 1
+    owns_download_redirect=1
+    log "Enabled $download_rate Mbps download pacing for $iphone"
+}
+
+clear_upload_queue() {
+    if [ "$owns_upload_redirect" = 1 ]; then
+        tc filter del dev "$lan" ingress protocol ip pref "$upload_redirect_pref" 2>/dev/null || :
+        owns_upload_redirect=0
+    fi
+    if [ "$owns_upload_bypass" = 1 ]; then
+        tc filter del dev "$lan" ingress protocol ip pref "$upload_bypass_pref" 2>/dev/null || :
+        owns_upload_bypass=0
+    fi
+    if [ "$owns_upload_queue" = 1 ]; then
+        ip link del "$upload_queue" 2>/dev/null || :
+        owns_upload_queue=0
+    fi
+}
+
+start_upload_queue() {
+    local subnet
+    subnet=$(wifi_subnet)
+    [ -n "$subnet" ] && queue_hook_available ingress || return 1
+    ip link add "$upload_queue" type ifb || return 1
+    owns_upload_queue=1
+    configure_queue "$upload_queue" "$upload_rate" || return 1
+    tc filter add dev "$lan" ingress protocol ip pref "$upload_bypass_pref" u32 \
+        match ip src "$iphone/32" match ip dst "$subnet" flowid 1:1 || return 1
+    owns_upload_bypass=1
+    # Select traffic sent to this phone as the gateway, excluding non-unicast IP.
+    tc filter add dev "$lan" ingress protocol ip pref "$upload_redirect_pref" u32 \
+        match ip src "$iphone/32" match ip dst 0.0.0.0/1 \
+        action mirred egress redirect dev "$upload_queue" || return 1
+    owns_upload_redirect=1
+    tc filter add dev "$lan" ingress protocol ip pref "$upload_redirect_pref" u32 \
+        match ip src "$iphone/32" match ip dst 128.0.0.0/2 \
+        action mirred egress redirect dev "$upload_queue" &&
+    tc filter add dev "$lan" ingress protocol ip pref "$upload_redirect_pref" u32 \
+        match ip src "$iphone/32" match ip dst 192.0.0.0/3 \
+        action mirred egress redirect dev "$upload_queue" || return 1
+    log "Enabled $upload_rate Mbps upload pacing for $iphone"
+}
+
 clear_route() {
+    clear_download_queue
+    clear_upload_queue
     [ "$owns_chain" = 1 ] || return 0
     iptables -w -t nat -D POSTROUTING -s "$iphone/32" -o "$uplink" -j MASQUERADE 2>/dev/null || :
     iptables -w -D FORWARD -j "$chain" 2>/dev/null || :
@@ -96,13 +211,23 @@ configure_local_network() {
     fi
 }
 
+valid_rate() {
+    case "$1" in
+        [1-9]|[1-9][0-9]|[1-4][0-9][0-9]|500) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
 load_settings() {
+    local next_download next_upload
     [ -s "$state/network.conf" ] || return 1
     {
         IFS= read -r next_ssid &&
         IFS= read -r next_lan &&
         IFS= read -r next_phone &&
-        IFS= read -r next_mac
+        IFS= read -r next_mac || return 1
+        IFS= read -r next_download || :
+        IFS= read -r next_upload || :
     } <"$state/network.conf" || return 1
     [ -n "$next_ssid" ] && [ "$next_lan" != "$next_phone" ] || return 1
     for address in "$next_lan" "$next_phone"; do
@@ -119,6 +244,20 @@ load_settings() {
     lan_ip=$next_lan
     iphone=$next_phone
     iphone_mac=$next_mac
+    valid_rate "$next_download" || next_download=24
+    valid_rate "$next_upload" || next_upload=12
+    if [ "$download_rate" != "$next_download" ]; then
+        if [ "$owns_download_queue" = 0 ] ||
+            set_queue_rate change "$download_queue" "$next_download" 2>>"$state/relay.log"; then
+            download_rate=$next_download
+        fi
+    fi
+    if [ "$upload_rate" != "$next_upload" ]; then
+        if [ "$owns_upload_queue" = 0 ] ||
+            set_queue_rate change "$upload_queue" "$next_upload" 2>>"$state/relay.log"; then
+            upload_rate=$next_upload
+        fi
+    fi
 }
 
 prefer_cellular_default() {
@@ -240,6 +379,14 @@ while [ -f "$module/module.prop" ] && [ ! -e "$module/remove" ]; do
                     clear_route
                     if start_route "$1" "$2"; then
                         log "Forwarding $iphone through $uplink"
+                        if ! start_download_queue 2>>"$state/relay.log"; then
+                            clear_download_queue
+                            log "Download pacing unavailable; forwarding normally"
+                        fi
+                        if ! start_upload_queue 2>>"$state/relay.log"; then
+                            clear_upload_queue
+                            log "Upload pacing unavailable; forwarding normally"
+                        fi
                     else
                         clear_route
                     fi
