@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>无线 CarPlay 中继设置</title>
+<style>
+  :root { color-scheme: light dark; font: 16px system-ui, sans-serif; }
+  body { margin: 0; padding: 24px; }
+  main { max-width: 480px; margin: auto; }
+  h1 { font-size: 24px; margin: 0 0 24px; }
+  label, input { display: block; }
+  input { box-sizing: border-box; width: 100%; margin-top: 8px; }
+  input, button { padding: 10px 12px; font: inherit; border-radius: 8px; }
+  button { margin-top: 16px; }
+  p { line-height: 1.5; }
+</style>
+</head>
+<body><main>
+  <h1>无线 CarPlay 中继设置</h1>
+  <form id="settings">
+    <label for="ssid">盒子的 Wi-Fi 名称</label>
+    <input id="ssid" required autocomplete="off" autocapitalize="off" spellcheck="false">
+    <label for="gateway">安卓手机在盒子 Wi-Fi 上的 IPv4 地址</label>
+    <input id="gateway" required placeholder="192.168.1.2">
+    <label for="phone">iPhone 的 IPv4 地址</label>
+    <input id="phone" required placeholder="192.168.1.3">
+    <label for="mac">iPhone 在这个 Wi-Fi 上显示的 MAC 地址</label>
+    <input id="mac" required placeholder="00:11:22:33:44:55" autocapitalize="off">
+    <p>在 iPhone 的 Wi-Fi 设置中，将安卓手机的地址填为路由器。</p>
+    <button>保存</button>
+  </form>
+  <p id="status" role="status"></p>
+</main>
+<script>
+const input = document.getElementById("ssid");
+const status = document.getElementById("status");
+const form = document.getElementById("settings");
+const settingsPath = "/data/adb/carplay-5g-relay/network.conf";
+const fields = [input, ...["gateway", "phone", "mac"].map(id => document.getElementById(id))];
+let nextCallback = 0;
+
+function run(command) {
+  return new Promise((resolve, reject) => {
+    const callback = "u5c_result_" + nextCallback++;
+    window[callback] = (code, output) => {
+      delete window[callback];
+      if (code === 0) resolve(output);
+      else reject(new Error("设置命令执行失败"));
+    };
+    try {
+      window.ksu.exec(command, "{}", callback);
+    } catch (error) {
+      delete window[callback];
+      reject(error);
+    }
+  });
+}
+
+run("if [ -f " + settingsPath + " ]; then cat " + settingsPath + "; fi")
+  .then(value => { value.split("\n").slice(0, 4).forEach((part, i) => { fields[i].value = part; }); })
+  .catch(() => { status.textContent = "请在 KernelSU 管理器内打开此页面。"; });
+
+form.addEventListener("submit", async event => {
+  event.preventDefault();
+  const ssid = input.value;
+  if (!ssid.trim() || new TextEncoder().encode(ssid).length > 32 || /[\x00-\x1f\x7f]/.test(ssid)) {
+    status.textContent = "请输入有效的 Wi-Fi 名称，最多 32 字节。";
+    return;
+  }
+  const [gateway, phone, mac] = fields.slice(1).map(field => field.value.trim());
+  const ipv4 = value => /^(0|[1-9]\d{0,2})(\.(0|[1-9]\d{0,2})){3}$/.test(value) &&
+    value.split(".").every(part => Number(part) <= 255);
+  if (!ipv4(gateway) || !ipv4(phone) || gateway === phone || !/^([\da-f]{2}:){5}[\da-f]{2}$/i.test(mac)) {
+    status.textContent = "请检查 IPv4 地址和 MAC 地址。两个 IPv4 地址应不同。";
+    return;
+  }
+  // Encode the entire user input before passing it through the shell bridge.
+  const bytes = new TextEncoder().encode([ssid, gateway, phone, mac, ""].join("\n"));
+  const encoded = btoa(String.fromCharCode(...bytes));
+  try {
+    await run("umask 077; mkdir -p /data/adb/carplay-5g-relay && tmp=$(mktemp " + settingsPath + ".XXXXXX) && " +
+      "printf %s " + encoded + " | base64 -d >\"$tmp\" && mv \"$tmp\" " + settingsPath);
+    status.textContent = "已保存，中继会自动应用。";
+  } catch {
+    status.textContent = "保存失败，请确认模块已启用。";
+  }
+});
+</script>
+</body>
+</html>
