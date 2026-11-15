@@ -33,6 +33,8 @@ upload_rate=12
 
 log() { printf '%s %s\n' "$(date '+%F %T')" "$*" >>"$state/relay.log"; }
 
+. "$module/ipv6.sh"
+
 clear_download_queue() {
     if [ "$owns_download_redirect" = 1 ]; then
         tc filter del dev "$lan" egress protocol ip pref "$download_redirect_pref" 2>/dev/null || :
@@ -133,6 +135,7 @@ start_upload_queue() {
 }
 
 clear_route() {
+    clear_ipv6
     clear_download_queue
     clear_upload_queue
     [ "$owns_chain" = 1 ] || return 0
@@ -219,7 +222,7 @@ valid_rate() {
 }
 
 load_settings() {
-    local next_download next_upload
+    local next_download next_upload next_ipv6
     [ -s "$state/network.conf" ] || return 1
     {
         IFS= read -r next_ssid &&
@@ -228,6 +231,7 @@ load_settings() {
         IFS= read -r next_mac || return 1
         IFS= read -r next_download || :
         IFS= read -r next_upload || :
+        IFS= read -r next_ipv6 || :
     } <"$state/network.conf" || return 1
     [ -n "$next_ssid" ] && [ "$next_lan" != "$next_phone" ] || return 1
     for address in "$next_lan" "$next_phone"; do
@@ -244,6 +248,7 @@ load_settings() {
     lan_ip=$next_lan
     iphone=$next_phone
     iphone_mac=$next_mac
+    ipv6_enabled=$next_ipv6
     valid_rate "$next_download" || next_download=24
     valid_rate "$next_upload" || next_upload=12
     if [ "$download_rate" != "$next_download" ]; then
@@ -373,6 +378,7 @@ while [ -f "$module/module.prop" ] && [ ! -e "$module/remove" ]; do
                     prefer_cellular_default
                     if [ "$owns_chain" = 1 ] && [ "$1" = "$uplink" ] && [ "$2" = "$table" ] &&
                         route_is_intact; then
+                        sync_ipv6 2>>"$state/relay.log"
                         sleep 5
                         continue
                     fi
@@ -387,6 +393,7 @@ while [ -f "$module/module.prop" ] && [ ! -e "$module/remove" ]; do
                             clear_upload_queue
                             log "Upload pacing unavailable; forwarding normally"
                         fi
+                        sync_ipv6 2>>"$state/relay.log"
                     else
                         clear_route
                     fi

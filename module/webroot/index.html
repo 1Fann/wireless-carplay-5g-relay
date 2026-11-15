@@ -11,6 +11,7 @@
   h1 { font-size: 24px; margin: 0 0 24px; }
   label, input { display: block; }
   input { box-sizing: border-box; width: 100%; margin-top: 8px; }
+  input[type="checkbox"] { display: inline; width: auto; margin-right: 8px; }
   input, button { padding: 10px 12px; font: inherit; border-radius: 8px; }
   button { margin-top: 16px; }
   p { line-height: 1.5; }
@@ -31,6 +32,7 @@
     <input id="download" type="number" inputmode="numeric" min="1" max="500" step="1" value="24" required>
     <label for="upload">上传上限（Mbps）</label>
     <input id="upload" type="number" inputmode="numeric" min="1" max="500" step="1" value="12" required>
+    <label><input id="ipv6" type="checkbox">启用 IPv6 中继</label>
     <p>在 iPhone 的 Wi-Fi 设置中，将安卓手机的地址填为路由器。</p>
     <button>保存</button>
   </form>
@@ -40,6 +42,7 @@
 const input = document.getElementById("ssid");
 const status = document.getElementById("status");
 const form = document.getElementById("settings");
+const ipv6 = document.getElementById("ipv6");
 const settingsPath = "/data/adb/carplay-5g-relay/network.conf";
 const fields = [input, ...["gateway", "phone", "mac", "download", "upload"].map(id => document.getElementById(id))];
 let nextCallback = 0;
@@ -68,6 +71,7 @@ run("if [ -f " + settingsPath + " ]; then cat " + settingsPath + "; fi")
     fields.slice(4).forEach((field, i) => {
       if (validRate(lines[i + 4])) field.value = lines[i + 4];
     });
+    ipv6.checked = lines[6] === "1";
   })
   .catch(() => { status.textContent = "请在 KernelSU 管理器内打开此页面。"; });
 
@@ -94,7 +98,7 @@ form.addEventListener("submit", async event => {
     return;
   }
   // Encode the entire user input before passing it through the shell bridge.
-  const bytes = new TextEncoder().encode([ssid, gateway, phone, mac, download, upload, ""].join("\n"));
+  const bytes = new TextEncoder().encode([ssid, gateway, phone, mac, download, upload, ipv6.checked ? "1" : "0", ""].join("\n"));
   const encoded = btoa(String.fromCharCode(...bytes));
   try {
     await run("umask 077; mkdir -p /data/adb/carplay-5g-relay && tmp=$(mktemp " + settingsPath + ".XXXXXX) && " +

@@ -13,6 +13,8 @@
 
 在支持相应流量队列的 Android 手机上，中继运行时会平滑 iPhone 的外网流量，默认下载上限为 24 Mbps，上传上限为 12 Mbps。在模块设置页可以单独调整两项上限，允许 1 到 500 Mbps 的整数。保存后自动应用，无需重启。同网段的本地流量绕过队列。如果某个方向的队列不受支持，或相应接口已有流量规则，该方向仍正常转发。
 
+在设置页勾选「启用 IPv6 中继」后，iPhone 会通过路由器通告自动配置 IPv6。IPv4 和 IPv6 共用下载与上传上限。IPv6 功能需要 ARM64 安卓设备，以及能向手机路由整个 IPv6 /64 前缀的蜂窝网络。开启后可在 iPhone 上访问 IPv6-only 测试页确认运营商是否支持。原有 IPv4 配置仍用于 IPv4 上网。
+
 当前实现需要 KernelSU、Android 29 及以上、iptables 和可用的 rmnet 蜂窝接口。盒子须允许同一 Wi-Fi 下的客户端互通。已在一套设备上验证上网链路，其他设备和实际车机兼容性需要验证。部分澎湃 OS 手机可在「设置 → WLAN → 网络加速」关闭「网络切换」，减少无互联网切换提醒。这个选项会影响该手机的其他 WLAN。
 
 在支持对应通知接口的澎湃 OS 上，模块会暂缓当前盒子网络的「当前 WLAN 无法访问互联网」通知。控制中心的 WLAN 连接状态仍由系统显示。
@@ -20,5 +22,7 @@
 ## 构建和卸载
 
 模块 ZIP 的根目录包含 module 目录的文件和 `cellular-request.jar`。使用 Android SDK 35 的 `android.jar` 编译 `cellular-helper/CellularRequest.java`，再用 D8 生成含 `classes.dex` 的 JAR。进程依赖系统的 `app_process` 和当前设备允许 root 注册蜂窝请求，其他 ROM 需要实测。
+
+IPv6 版本还需将 `ipv6-helper/ra.go` 以 `GOOS=linux GOARCH=arm64 CGO_ENABLED=0` 编译为 `relay-ra` 并放在 ZIP 根目录。
 
 在 KernelSU 中关闭或卸载模块。在 iPhone 的盒子 Wi-Fi 设置中把 IP 和 DNS 恢复为自动。
