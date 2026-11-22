@@ -32,7 +32,8 @@ clear_ipv6() {
         owns_ipv6_ul=0
     fi
     if [ "$owns_ipv6_up" = 1 ]; then
-        ip -6 rule del pref "$ipv6_up_pref" iif "$lan" from "$ipv6_prefix" lookup "$ipv6_table" 2>/dev/null || :
+        # Android may remove the cellular routing table's name before cleanup.
+        ip -6 rule del pref "$ipv6_up_pref" iif "$lan" from "$ipv6_prefix" 2>/dev/null || :
         owns_ipv6_up=0
     fi
     if [ "$owns_ipv6_down" = 1 ]; then

@@ -19,9 +19,13 @@
 
 在支持对应通知接口的澎湃 OS 上，模块会暂缓当前盒子网络的「当前 WLAN 无法访问互联网」通知。控制中心的 WLAN 连接状态仍由系统显示。
 
+在设置页启用「修复盒子 Wi-Fi 自动连接」，可尝试让 Android 记住这个网络允许无互联网。系统扫描到盒子时，如果手机未连接其他 Wi-Fi，模块会用系统中已经保存并允许自动连接的配置发起连接。设置按模块中填写的 Wi-Fi 名称匹配。
+
+模块监听 Android 的 Wi-Fi 扫描和连接事件。盒子未连接时通常等待事件，连接期间定时维护蜂窝转发与 IPv6 通告。系统不支持事件监听时，会回退到定时检查。
+
 ## 构建和卸载
 
-模块 ZIP 的根目录包含 module 目录的文件和 `cellular-request.jar`。使用 Android SDK 35 的 `android.jar` 编译 `cellular-helper/CellularRequest.java`，再用 D8 生成含 `classes.dex` 的 JAR。进程依赖系统的 `app_process` 和当前设备允许 root 注册蜂窝请求，其他 ROM 需要实测。
+模块 ZIP 的根目录包含 module 目录的文件和 `cellular-request.jar`。使用 Android SDK 35 的 `android.jar` 编译 `cellular-helper` 下的 Java 源码，再用 D8 生成含 `classes.dex` 的 JAR。进程依赖系统的 `app_process` 和当前设备允许 root 调用相关网络接口，其他 ROM 需要实测。
 
 IPv6 版本还需将 `ipv6-helper/ra.go` 以 `GOOS=linux GOARCH=arm64 CGO_ENABLED=0` 编译为 `relay-ra` 并放在 ZIP 根目录。
 

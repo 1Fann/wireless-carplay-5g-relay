@@ -30,6 +30,13 @@ owns_upload_bypass=0
 owns_upload_redirect=0
 download_rate=24
 upload_rate=12
+wifi_repair_enabled=0
+wifi_repair_pid=
+events_pid=
+event=ready
+fallback_repair_at=0
+wifi_connect_at=0
+events_retry_at=0
 
 log() { printf '%s %s\n' "$(date '+%F %T')" "$*" >>"$state/relay.log"; }
 
@@ -173,7 +180,7 @@ request_cellular() {
     fi
     CLASSPATH="$module/cellular-request.jar" /system/bin/app_process /system/bin \
         --nice-name=carplay-cellular-request local.carplay.cellular.CellularRequest \
-        9>&- >"$state/cellular-request.log" 2>&1 &
+        8>&- 9>&- >"$state/cellular-request.log" 2>&1 &
     cellular_pid=$!
 }
 
@@ -222,7 +229,7 @@ valid_rate() {
 }
 
 load_settings() {
-    local next_download next_upload next_ipv6
+    local next_download next_upload next_ipv6 next_wifi_repair
     [ -s "$state/network.conf" ] || return 1
     {
         IFS= read -r next_ssid &&
@@ -232,6 +239,7 @@ load_settings() {
         IFS= read -r next_download || :
         IFS= read -r next_upload || :
         IFS= read -r next_ipv6 || :
+        IFS= read -r next_wifi_repair || :
     } <"$state/network.conf" || return 1
     [ -n "$next_ssid" ] && [ "$next_lan" != "$next_phone" ] || return 1
     for address in "$next_lan" "$next_phone"; do
@@ -243,12 +251,18 @@ load_settings() {
         clear_route
         restore_local_network
         release_cellular
+        stop_wifi_repair
+        wifi_connect_at=0
     fi
     ssid=$next_ssid
     lan_ip=$next_lan
     iphone=$next_phone
     iphone_mac=$next_mac
     ipv6_enabled=$next_ipv6
+    if [ "$wifi_repair_enabled" != "$next_wifi_repair" ]; then
+        stop_wifi_repair
+    fi
+    wifi_repair_enabled=$next_wifi_repair
     valid_rate "$next_download" || next_download=24
     valid_rate "$next_upload" || next_upload=12
     if [ "$download_rate" != "$next_download" ]; then
@@ -263,6 +277,109 @@ load_settings() {
             upload_rate=$next_upload
         fi
     fi
+}
+
+stop_wifi_repair() {
+    if [ -n "$wifi_repair_pid" ]; then
+        kill -TERM "$wifi_repair_pid" 2>/dev/null || :
+        wait "$wifi_repair_pid" 2>/dev/null || :
+        wifi_repair_pid=
+    fi
+}
+
+repair_box_wifi() {
+    local action=wifi now remaining
+    [ "$wifi_repair_enabled" = 1 ] || return 0
+    case "$event" in
+        ready|scan|settings) action=scan ;;
+        wifi) ;;
+        fallback)
+            now=$(date +%s)
+            [ "$now" -ge "$fallback_repair_at" ] || return 0
+            fallback_repair_at=$((now + 30))
+            action=scan
+            ;;
+        *) return 0 ;;
+    esac
+    if [ -n "$wifi_repair_pid" ] && kill -0 "$wifi_repair_pid" 2>/dev/null; then
+        return 0
+    fi
+    case "$wifi" in
+        "Connected to "*)
+            printf '%s\n' "$wifi" | grep -Fxq "$(printf '\tSSID: %s' "$ssid")" || return 0
+            ;;
+        "Not connected.")
+            [ "$action" = scan ] || return 0
+            read -r now remaining </proc/uptime || return 0
+            now=${now%%.*}
+            [ "$now" -ge "$wifi_connect_at" ] || return 0
+            # A rejected association can trigger another Android scan immediately.
+            wifi_connect_at=$((now + 30))
+            ;;
+        *) return 0 ;;
+    esac
+    CLASSPATH="$module/cellular-request.jar" /system/bin/app_process /system/bin \
+        --nice-name=carplay-box-wifi local.carplay.cellular.BoxWifi "$ssid" "$action" \
+        8>&- 9>&- >>"$state/wifi-repair.log" 2>&1 &
+    wifi_repair_pid=$!
+}
+
+start_wifi_events() {
+    local channel
+    channel=$(mktemp -d "$state/events.XXXXXX") || return 1
+    if ! mkfifo "$channel/stream"; then
+        rmdir "$channel"
+        return 1
+    fi
+    CLASSPATH="$module/cellular-request.jar" /system/bin/app_process /system/bin \
+        --nice-name=carplay-wifi-events local.carplay.cellular.WifiEvents \
+        "$state/network.conf" "$module" 9>&- >"$channel/stream" 2>"$state/wifi-events.log" &
+    events_pid=$!
+    exec 8<"$channel/stream"
+    rm -f "$channel/stream"
+    rmdir "$channel"
+    IFS= read -r -t 5 event <&8 && [ "$event" = ready ]
+}
+
+stop_wifi_events() {
+    if [ -n "$events_pid" ]; then
+        exec 8<&-
+        kill -TERM "$events_pid" 2>/dev/null || :
+        wait "$events_pid" 2>/dev/null || :
+        events_pid=
+    fi
+}
+
+wait_for_event() {
+    local result now
+    while [ -n "$events_pid" ]; do
+        if [ "$#" = 0 ]; then
+            IFS= read -r event <&8 2>/dev/null
+        else
+            IFS= read -r -t "$1" event <&8 2>/dev/null
+        fi
+        result=$?
+        case "$result" in
+            0) return 0 ;;
+            142) event=maintenance; return 0 ;;
+        esac
+        # Starting a short-lived helper can interrupt mksh's read (SIGCHLD).
+        kill -0 "$events_pid" 2>/dev/null && continue
+        stop_wifi_events
+        log "Wi-Fi event listener stopped; using periodic checks"
+        events_retry_at=$(($(date +%s) + 60))
+    done
+    sleep 5
+    now=$(date +%s)
+    if [ "$now" -ge "$events_retry_at" ]; then
+        events_retry_at=$((now + 60))
+        if start_wifi_events; then
+            log "Listening for Wi-Fi events"
+            return 0
+        fi
+        stop_wifi_events
+    fi
+    event=fallback
 }
 
 prefer_cellular_default() {
@@ -337,26 +454,37 @@ mkdir -p "$state" || exit 1
 if [ "${1:-}" != --locked ]; then
     exec /data/adb/ksu/bin/busybox flock -n "$state/module.lock" /system/bin/sh "$0" --locked
 fi
-trap 'clear_route; restore_local_network; release_cellular' EXIT
+trap 'stop_wifi_events; stop_wifi_repair; clear_route; restore_local_network; release_cellular' EXIT
 trap 'exit 0' HUP INT TERM
 while [ "$(getprop sys.boot_completed)" != 1 ]; do sleep 5; done
+if start_wifi_events; then
+    log "Listening for Wi-Fi events"
+else
+    stop_wifi_events
+    event=fallback
+    events_retry_at=$(($(date +%s) + 60))
+    log "Wi-Fi events unavailable; using periodic checks"
+fi
 
 while [ -f "$module/module.prop" ] && [ ! -e "$module/remove" ]; do
     if [ -e "$module/disable" ]; then
+        stop_wifi_repair
         clear_route
         restore_local_network
         release_cellular
-        sleep 5
+        wait_for_event
         continue
     fi
     if ! load_settings; then
+        stop_wifi_repair
         clear_route
         restore_local_network
         release_cellular
-        sleep 5
+        wait_for_event
         continue
     fi
     wifi=$(iw dev "$lan" link 2>/dev/null)
+    repair_box_wifi
     case "$wifi" in
         "Connected to "*)
             if printf '%s\n' "$wifi" | grep -Fxq "$(printf '\tSSID: %s' "$ssid")" &&
@@ -379,7 +507,7 @@ while [ -f "$module/module.prop" ] && [ ! -e "$module/remove" ]; do
                     if [ "$owns_chain" = 1 ] && [ "$1" = "$uplink" ] && [ "$2" = "$table" ] &&
                         route_is_intact; then
                         sync_ipv6 2>>"$state/relay.log"
-                        sleep 5
+                        wait_for_event 5
                         continue
                     fi
                     clear_route
@@ -397,11 +525,11 @@ while [ -f "$module/module.prop" ] && [ ! -e "$module/remove" ]; do
                     else
                         clear_route
                     fi
-                    sleep 5
+                    wait_for_event 5
                     continue
                 fi
                 clear_route
-                sleep 5
+                wait_for_event 5
                 continue
             fi
             ;;
@@ -409,5 +537,5 @@ while [ -f "$module/module.prop" ] && [ ! -e "$module/remove" ]; do
     clear_route
     restore_local_network
     release_cellular
-    sleep 5
+    wait_for_event
 done
